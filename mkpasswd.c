@@ -23,6 +23,7 @@ static int set_special     = 0;
 static int isDistribute = 0;
 static int isVerbose    = 0 ;
 static int repeats      = 1 ;
+static int use_debug    = 0 ;
 
 #define CheckAndSet_arg( A, ARG ) \
     { \
@@ -52,12 +53,14 @@ int init( int argc, char *argv[] )
 {
     int c, n ;
 
-    while( EOF != ( c = getopt( argc, argv, "l:d:c:C:s:v21h" ) ) )
+    while( EOF != ( c = getopt( argc, argv, "l:d:c:C:s:v21hD" ) ) )
     {
         switch( c )
         {
         default  : case '?' : case 'h' :
             printhelp();break;
+        case 'D' : 
+            use_debug = 1 ; break;
 
         case 'l' : CheckAndSet( length  ); set_length  = 1 ; break;
         case 'd' : CheckAndSet( number  ); set_number  = 1 ; break;
@@ -82,8 +85,13 @@ int init( int argc, char *argv[] )
     {
         if( length < already_fixed )
         {
-            fprintf( stderr,"length is too small than 'number + lower + upper + special'.\n" );
+            fprintf( stderr,"length is smaller than 'number + lower + upper + special'.\n" );
             return -1;
+        }else if( length == already_fixed ) {
+            if( ! set_number  ) number  = 0;
+            if( ! set_lower   ) lower   = 0;
+            if( ! set_upper   ) upper   = 0;
+            if( ! set_special ) special = 0;
         }
     }else{
         if( length < already_fixed ) length = already_fixed ;
@@ -111,26 +119,6 @@ unsigned char getrandom_byte( int fh, int max )
 
 int fix_length( int fh )
 {
-#if 0
-    int m = number + lower + upper + special +2;
-    int d = length - ( number + lower + upper + special );
-    int i ;
-
-    int p_number  = number - (number > 1 ? 1 : 0 );
-    int p_lower   = number + lower  + (number > 1 ? 1 : 0 ) +1;
-    int p_upper   = number + lower + upper + ( special > 1 ? 1 : 0 ) +1;
-
-    while( d > 0 )
-    {
-        i = getrandom_int( fh, m );
-
-        if( i < p_number ) number ++ ;
-        else if( i < p_lower ) lower ++ ;
-        else if( i < p_upper ) upper ++ ;
-        else special ++;
-        d --;
-    }
-#else
     int d, i ;
     int p_number, p_lower, p_upper, p_special, r_maxval; 
 
@@ -140,30 +128,35 @@ int fix_length( int fh )
 
     if( d == 0 ) return 1;
 
-    p_number  = set_number  ? 0        : ( number - (number > 1 ? 1 : 0 ) ) ;
-    p_lower   = set_lower   ? p_number : ( number + lower  + (number > 1 ? 1 : 0 ) +1 );
-    p_upper   = set_upper   ? p_lower  : ( number + lower + upper + ( special > 1 ? 1 : 0 ) +1 );
-    p_special = set_special ? p_upper  : ( number + lower + upper + special );
+    p_number  = set_number  ? 0        :     number  ;
+    p_lower   = set_lower   ? p_number : ( p_number + lower + 1 );
+    p_upper   = set_upper   ? p_lower  : ( p_lower  + upper + 1 );
+    p_special = set_special ? p_upper  : ( p_upper  + 1 );
     r_maxval  = p_special +1;
 
-
+    if(use_debug)
+    {
+        fprintf( stderr, "before fix rot:  p_number = %d, p_lower = %d, p_upper= %d, p_special=%d, r_maxval = %d )\n",
+                                           p_number,      p_lower,      p_upper,     p_special, r_maxval );
+        fprintf( stderr, "before fix vector: number = %d,   lower = %d,   upper= %d,   special=%d ( length = %d )\n",
+                                             number,        lower,        upper,       special, length  );
+    }
    // roulette
     if( d < 0 )
     {
-        while( d < 0 )
+         while( d < 0 )
         {
             i = getrandom_int( fh, r_maxval );
 
-            if( i < p_number )       { number -- ; d++ ; }
-            else if( i < p_lower )   {  lower -- ; d++ ; }
-            else if( i < p_upper )   {  upper -- ; d++ ; }
-            else if( i < p_special ) { special --; d++ ; }
+            if( i < p_number       && number  > 0 ) { number -- ; d++ ; }
+            else if( i < p_lower   && lower   > 0 ) {  lower -- ; d++ ; }
+            else if( i < p_upper   && upper   > 0 ) {  upper -- ; d++ ; }
+            else if( i < p_special && special > 0 ) { special --; d++ ; }
         }
     }else{  // d > 0 
         while( d > 0 )
         {
             i = getrandom_int( fh, r_maxval );
-
             if( i < p_number )       { number ++ ; d--; }
             else if( i < p_lower )   {  lower ++ ; d--; }
             else if( i < p_upper )   {  upper ++ ; d--; }
@@ -171,26 +164,46 @@ int fix_length( int fh )
         }
         
     } 
+    if(use_debug)
+    {
+        fprintf( stderr, " after fix vector: number = %d,   lower = %d,   upper= %d,   special=%d ( length = %d )\n",
+                                             number,        lower,        upper,       special, length  );
+    }
 
-#endif
     return 1;
 }
 
-int insert_char( char *string, int fh, char newch )
+int print_pass( const char *string, int len )
 {
-    int  slen = strlen( string );
-    int  pos = getrandom_int( fh, slen + 1);
-    int  ch;
-
-    for( ; pos < slen ; pos ++ )
-    {
-        ch = string[pos];
-        string[pos] = newch;
-        newch = ch;
-    }
-   // last char
-    string[pos] = newch; 
+    int i ;
+    fprintf( stderr, "pass = %c ", string[0] );
+    for( i = 1 ; i < len ; i++ )
+        fprintf( stderr, ", %c", string[i] );
     return 1;
+}
+
+int insert_char( char *string, int slen, int fh, char newch )
+{
+    int  pos = getrandom_int( fh, slen );
+    int  ch;
+//fprintf( stderr, "i: slen = %d, pos = %d, newch = %c \n",
+//                     slen,      pos,      newch     );
+
+    if( string[pos] == '\0' )
+    {
+        string[pos] = newch;
+        return 1;
+    }else{
+        for( pos = 0 ; pos < slen ; pos ++ )
+        {
+            if( string[pos] == '\0' ) 
+            {
+                string[pos] = newch;
+                return 2;
+            }
+        }
+    }
+    return -1 ; // NEVER REACH
 }
 
 
@@ -208,23 +221,58 @@ static const char *rnums  = "7890";
 static const char *lspec  = "!@#$%" ;
 static const char *rspec  = "^&*()-=_+[]{};:'\"<>,.?/";
 
-
-int setrf( char *rpass, char *lpass, int fh, int len,  int start_left, const char *rval, const char *lval )
+int mkpasswd_1( int fh,  char *pass, int length )
 {
-    int i;
+    int i, m;
+
+    if( number > 0 )
+    {
+        m = strlen( anums );
+        for( i = 0 ; i < number ; i++ )
+            insert_char( pass, length, fh, anums[ getrandom_byte( fh, m ) ]) ;
+    }
+    if( upper > 0 )
+    {
+        m = strlen( aupper );
+        for( i = 0 ; i < upper ; i++ )
+            insert_char( pass, length, fh, aupper[ getrandom_byte( fh, m ) ]) ;
+    }
+    if( lower > 0 )
+    {
+        m = strlen( aupper );
+        for( i = 0 ; i < lower ; i++ )
+            insert_char( pass, length, fh, alower[ getrandom_byte( fh, m ) ]) ;
+    }
+    if( special > 0 )
+    {
+        m = strlen( aspec );
+        for( i = 0 ; i < special ; i++ )
+            insert_char( pass, length, fh, aspec[ getrandom_byte( fh, m ) ]) ;
+    }
+
+    return 1;
+}
+
+
+int setrf( char *rpass, int rl,  char *lpass, int ll, int fh, int len, int start_left, const char *rval, const char *lval )
+{
+    int i ;
     int rm = strlen( rval );
     int lm = strlen( lval );
 
     for( i = 0 ; i < len ; i += 2 )
     {
-        insert_char( ( start_left ? lpass : rpass ), fh, 
-                     ( start_left ? lval[ getrandom_byte(fh, lm) ] 
-                                  : rval[ getrandom_byte(fh, rm) ] ) );
+        if( start_left )
+            insert_char( lpass,  ll, fh, lval[ getrandom_byte(fh, lm) ] );
+        else
+            insert_char( rpass,  rl, fh, rval[ getrandom_byte(fh, rm) ] );
+
         if( i+1 < len )
         {
-            insert_char( ( start_left ? rpass : lpass ), fh,
-                         ( start_left ? rval[ getrandom_byte(fh, rm) ]
-                                      : lval[ getrandom_byte(fh, lm) ] ) );
+            if( start_left )
+                insert_char( rpass,  rl, fh, rval[ getrandom_byte(fh, rm) ] );
+            else
+                insert_char( lpass,  ll, fh, lval[ getrandom_byte(fh, lm) ] );
         }else{
             start_left = ( start_left ? 0 : 1 );
         }
@@ -232,84 +280,52 @@ int setrf( char *rpass, char *lpass, int fh, int len,  int start_left, const cha
     return start_left ;
 }
 
-int mkpasswd( int fh,  char *pass, int length, int isDistribute )
+int mkpasswd_2( int fh,  char *pass, int length )
 {
     int start_left =  getrandom_byte( fh, 1 );
     char *rpass, *lpass ;
-    int rm, lm;
+    int rl, ll;
     int i,j;
     int sl = start_left;
 
-    if( isDistribute )
+    if( start_left )
     {
-        if( start_left )
-        {
-            lpass = (char *)calloc( length - length /2 +2, sizeof(char )) ;
-            rpass = (char *)calloc( length /2 +2, sizeof(char )) ;
-        }else{
-            lpass = (char *)calloc( length /2 +2, sizeof(char )) ;
-            rpass = (char *)calloc( length - length /2 +2, sizeof(char )) ;
-        }
-
-        if( number > 0 )
-            sl = setrf( rpass, lpass, fh, number, sl, rnums, lnums );
-        if( upper  > 0 )
-            sl = setrf( rpass, lpass, fh, upper, sl, rupper, lupper );
-        if( lower > 0 )
-            sl = setrf( rpass, lpass, fh, lower, sl, rlower, llower );
-        if( special > 0 )
-            sl = setrf( rpass, lpass, fh, special, sl, rspec, lspec );
-
-        if( start_left )
-        {
-           for( i = 0, j = 0 ; i < length ; i+=2, j++ )
-           {
-               pass[i] = lpass[j];
-               if( i+1 < length )
-               {
-                   pass[i+1] = rpass[j];
-               }
-           }
-        }else{
-           for( i = 0, j = 0 ; i < length ; i+=2, j++ )
-           {
-               pass[i] = rpass[j];
-               if( i+1 < length )
-               {
-                   pass[i+1] = lpass[j];
-               }
-           }
-        }
-
+        ll = length - length /2 ;
+        rl = length /2 ;   
+        rl += ( (ll + rl)  == length ? 0 : 1 );
     }else{
-        int i, m;
-
-        if( number > 0 )
-        {
-            m = strlen( anums );
-            for( i = 0 ; i < number ; i++ )
-                insert_char( pass, fh, anums[ getrandom_byte( fh, m ) ]) ;
-        }
-        if( upper > 0 )
-        {
-            m = strlen( aupper );
-            for( i = 0 ; i < upper ; i++ )
-                insert_char( pass, fh, aupper[ getrandom_byte( fh, m ) ]) ;
-        }
-        if( lower > 0 )
-        {
-            m = strlen( aupper );
-            for( i = 0 ; i < lower ; i++ )
-                insert_char( pass, fh, alower[ getrandom_byte( fh, m ) ]) ;
-        }
-        if( special > 0 )
-        {
-            m = strlen( aspec );
-            for( i = 0 ; i < special ; i++ )
-                insert_char( pass, fh, aspec[ getrandom_byte( fh, m ) ]) ;
-        }
-
+        rl = length - length /2 ;
+        ll = length /2 ;   
+        ll += ( (ll + rl)  == length ? 0 : 1 );
     }
+
+    lpass = (char *)calloc( ll, sizeof(char )) ;
+    rpass = (char *)calloc( rl, sizeof(char )) ;
+
+    if( number > 0 )
+        sl = setrf( rpass, rl, lpass, ll, fh, number,  sl, rnums,  lnums  );
+    if( upper  > 0 )
+        sl = setrf( rpass, rl, lpass, ll, fh, upper,   sl, rupper, lupper );
+    if( lower > 0 )
+        sl = setrf( rpass, rl, lpass, ll, fh, lower,   sl, rlower, llower );
+    if( special > 0 )
+        sl = setrf( rpass, rl, lpass, ll, fh, special, sl, rspec,  lspec  );
+
+    if( start_left )
+    {
+       for( i = 0, j = 0 ; i < length ; i+=2, j++ )
+       {
+           pass[i] = lpass[j];
+           if( i+1 < length ) pass[i+1] = rpass[j];
+       }
+    }else{
+       for( i = 0, j = 0 ; i < length ; i+=2, j++ )
+       {
+           pass[i] = rpass[j];
+           if( i+1 < length ) pass[i+1] = lpass[j];
+       }
+    }
+
     return 1;
 }
 
@@ -318,10 +334,15 @@ int main( int argc, char *argv[] )
     int fh;
     int ret;
     char *pass;
+    int (*mkpasswd)( int ,  char *, int );
 
    // read options.
     ret = init( argc, argv );
     if( ret < 0 ) exit( ret );
+
+    if(use_debug)
+        fprintf( stderr, "m: length = %d, number = %d, lower = %d, upper= %d, special=%d \n",
+                             length ,     number,      lower,      upper,     special  );
 
    // open random device
     fh = open( PATH_RANDOM, O_RDONLY );
@@ -331,26 +352,29 @@ int main( int argc, char *argv[] )
     } 
 
    // fix arguments
-    if( length > number + special + lower + upper )
+    if( length != number + special + lower + upper )
         fix_length( fh );
 
+    if(use_debug)
+        fprintf( stderr, "m: length = %d, number = %d, lower = %d, upper= %d, special=%d \n",
+                             length ,     number,      lower,      upper,     special  );
+    pass = (char *)malloc( length+2 );
 
-    pass = (char *)calloc( length, sizeof(char) + 2);
+
+    if( isDistribute )
+        mkpasswd = mkpasswd_2;
+    else
+        mkpasswd = mkpasswd_1;
+
     do{ 
-        mkpasswd( fh,  pass, length, isDistribute );
+        memset( pass, 0x00, length+2 );
+        mkpasswd( fh,  pass, length );
         printf( "%s\n", pass ); 
-        memset( pass, 0x00, length );
     } while( --repeats > 0 );
-
 
     close( fh );
 
     exit(0);
 }
-
-
-
-
-
 
 
